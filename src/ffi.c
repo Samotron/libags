@@ -52,6 +52,10 @@ static void set_optional_string_view(const char *value, ags_string_view *out_vie
   out_view->length = strlen(value);
 }
 
+static void set_summary_string_view(const char *value, ags_string_view *out_view) {
+  set_optional_string_view(value, out_view);
+}
+
 int ags_ffi_supports_abi(uint32_t abi_version) {
   return abi_version == (uint32_t)ags_abi_version();
 }
@@ -274,6 +278,81 @@ ags_status ags_table_get_column_export(
   return AGS_STATUS_OK;
 }
 
+ags_status ags_table_get_summary_export(
+  const ags_table *table,
+  ags_table_summary_export *out_export
+) {
+  ags_table_summary summary;
+  ags_status status = AGS_STATUS_OK;
+
+  if (table == NULL || out_export == NULL) {
+    return AGS_STATUS_INVALID_ARGUMENT;
+  }
+
+  memset(out_export, 0, sizeof(*out_export));
+  status = ags_table_get_summary(table, &summary);
+  if (status != AGS_STATUS_OK) {
+    return status;
+  }
+
+  out_export->group_index = summary.group_index;
+  set_summary_string_view(summary.group_name, &out_export->group_name);
+  out_export->column_count = summary.column_count;
+  out_export->row_count = summary.row_count;
+  out_export->group_line_number = summary.group_line_number;
+  out_export->heading_line_number = summary.heading_line_number;
+  out_export->unit_line_number = summary.unit_line_number;
+  out_export->type_line_number = summary.type_line_number;
+  out_export->numeric_column_count = summary.numeric_column_count;
+  out_export->geometry_candidate_count = summary.geometry_candidate_count;
+  out_export->has_source_metadata = summary.has_source_metadata;
+  return AGS_STATUS_OK;
+}
+
+ags_status ags_table_collection_get_summary_export(
+  const ags_table_collection *collection,
+  size_t table_index,
+  ags_table_summary_export *out_export
+) {
+  const ags_table *table = ags_table_collection_get(collection, table_index);
+
+  if (table == NULL || out_export == NULL) {
+    return AGS_STATUS_INVALID_ARGUMENT;
+  }
+
+  return ags_table_get_summary_export(table, out_export);
+}
+
+ags_status ags_table_get_column_summary_export(
+  const ags_table *table,
+  size_t column_index,
+  ags_column_summary_export *out_export
+) {
+  ags_column_summary summary;
+  ags_status status = AGS_STATUS_OK;
+
+  if (table == NULL || out_export == NULL) {
+    return AGS_STATUS_INVALID_ARGUMENT;
+  }
+
+  memset(out_export, 0, sizeof(*out_export));
+  status = ags_table_get_column_summary(table, column_index, &summary);
+  if (status != AGS_STATUS_OK) {
+    return status;
+  }
+
+  out_export->column_index = summary.column_index;
+  set_summary_string_view(summary.column_name, &out_export->column_name);
+  set_summary_string_view(summary.unit, &out_export->unit);
+  set_summary_string_view(summary.type, &out_export->type);
+  out_export->column_class = summary.column_class;
+  out_export->null_count = summary.null_count;
+  out_export->non_null_count = summary.non_null_count;
+  out_export->is_numeric = summary.is_numeric;
+  out_export->can_derive_geometry = summary.can_derive_geometry;
+  return AGS_STATUS_OK;
+}
+
 ags_status ags_numeric_column_get_export(
   const ags_numeric_column *numeric,
   ags_numeric_export *out_export
@@ -338,5 +417,28 @@ ags_status ags_geometry_column_wkb_view(
 
   out_view->data = data;
   out_view->length = length;
+  return AGS_STATUS_OK;
+}
+
+ags_status ags_validation_report_get_diagnostic_export(
+  const ags_validation_report *report,
+  size_t diagnostic_index,
+  ags_validation_diagnostic_export *out_export
+) {
+  if (report == NULL || out_export == NULL) {
+    return AGS_STATUS_INVALID_ARGUMENT;
+  }
+
+  memset(out_export, 0, sizeof(*out_export));
+  if (diagnostic_index >= ags_validation_report_diagnostic_count(report)) {
+    return AGS_STATUS_NOT_FOUND;
+  }
+
+  out_export->severity = ags_validation_report_diagnostic_severity(report, diagnostic_index);
+  out_export->line_number = ags_validation_report_diagnostic_line_number(report, diagnostic_index);
+  set_summary_string_view(ags_validation_report_diagnostic_rule(report, diagnostic_index), &out_export->rule);
+  set_summary_string_view(ags_validation_report_diagnostic_message(report, diagnostic_index), &out_export->message);
+  set_summary_string_view(ags_validation_report_diagnostic_group(report, diagnostic_index), &out_export->group);
+  set_summary_string_view(ags_validation_report_diagnostic_field(report, diagnostic_index), &out_export->field);
   return AGS_STATUS_OK;
 }

@@ -26,6 +26,21 @@ typedef struct ags_suffix_pair {
   const char *northing_suffix;
 } ags_suffix_pair;
 
+struct ags_table_collection {
+  ags_allocator allocator;
+  size_t table_count;
+  ags_table **tables;
+};
+
+static int parse_numeric_kind(const char *type, ags_numeric_kind *out_kind, int *out_precision);
+static int parse_double_exact(const char *text, double *out_value);
+static ags_status find_geometry_column_indices(
+  const ags_table *table,
+  const ags_geometry_options *options,
+  size_t *out_easting_index,
+  size_t *out_northing_index
+);
+
 static ags_status pick_allocator_from_table_options(
   const ags_table_options *options,
   ags_allocator *out_allocator
@@ -164,6 +179,23 @@ static char *copy_optional_string(const ags_allocator *allocator, const char *va
   }
 
   return ags_strndup_alloc(allocator, value, strlen(value));
+}
+
+static void ags_table_set_source_metadata(
+  ags_table *table,
+  size_t group_index,
+  const ags_group_internal *group
+) {
+  if (table == NULL || group == NULL) {
+    return;
+  }
+
+  table->source_group_index = group_index;
+  table->group_line_number = group->group_line_number;
+  table->heading_line_number = group->heading_line_number;
+  table->unit_line_number = group->unit_line_number;
+  table->type_line_number = group->type_line_number;
+  table->has_source_metadata = 1;
 }
 
 static int table_has_column_name(
@@ -403,6 +435,7 @@ ags_status ags_table_create(
 
   memset(table, 0, sizeof(*table));
   memcpy(&table->allocator, &allocator, sizeof(table->allocator));
+  table->source_group_index = (size_t)-1;
   table->group_name = copy_string_or_empty(&table->allocator, group_name);
   if (table->group_name == NULL) {
     ags_table_destroy(table);
@@ -585,6 +618,212 @@ const char *const *ags_table_column_values(
   return (const char *const *)table->columns[column_index].values;
 }
 
+static int table_column_is_numeric_compatible(
+  const ags_table *table,
+  size_t column_index,
+  size_t *out_null_count,
+  size_t *out_non_null_count
+) {
+  ags_numeric_kind kind = AGS_NUMERIC_NONE;
+  int precision = 0;
+  size_t row_index = 0;
+  size_t null_count = 0;
+  size_t non_null_count = 0;
+
+  if (table == NULL || column_index >= table->column_count) {
+    return 0;
+  }
+
+  for (row_index = 0; row_index < table->row_count; ++row_index) {
+    const char *value = table->columns[column_index].values[row_index];
+    if (value == NULL || value[0] == '\0') {
+      null_count += 1;
+    } else {
+      non_null_count += 1;
+    }
+  }
+
+  if (out_null_count != NULL) {
+    *out_null_count = null_count;
+  }
+  if (out_non_null_count != NULL) {
+    *out_non_null_count = non_null_count;
+  }
+
+  if (!parse_numeric_kind(table->columns[column_index].type, &kind, &precision)) {
+    (void)kind;
+    (void)precision;
+    return 0;
+  }
+
+  for (row_index = 0; row_index < table->row_count; ++row_index) {
+    const char *value = table->columns[column_index].values[row_index];
+    double parsed = 0.0;
+
+    if (value == NULL || value[0] == '\0') {
+      continue;
+    }
+
+    if (!parse_double_exact(value, &parsed)) {
+      return 0;
+    }
+  }
+
+  return 1;
+}
+
+static int table_geometry_candidate_indices(
+  const ags_table *table,
+  size_t *out_easting_index,
+  size_t *out_northing_index
+) {
+  size_t easting_index = (size_t)-1;
+  size_t northing_index = (size_t)-1;
+
+  if (table == NULL) {
+    return 0;
+  }
+
+  if (find_geometry_column_indices(table, NULL, &easting_index, &northing_index) != AGS_STATUS_OK) {
+    if (out_easting_index != NULL) {
+      *out_easting_index = (size_t)-1;
+    }
+    if (out_northing_index != NULL) {
+      *out_northing_index = (size_t)-1;
+    }
+    return 0;
+  }
+
+  if (out_easting_index != NULL) {
+    *out_easting_index = easting_index;
+  }
+  if (out_northing_index != NULL) {
+    *out_northing_index = northing_index;
+  }
+  return 1;
+}
+
+ags_status ags_table_get_summary(
+  const ags_table *table,
+  ags_table_summary *out_summary
+) {
+  size_t column_index = 0;
+  size_t easting_index = (size_t)-1;
+  size_t northing_index = (size_t)-1;
+
+  if (table == NULL || out_summary == NULL) {
+    return AGS_STATUS_INVALID_ARGUMENT;
+  }
+
+  memset(out_summary, 0, sizeof(*out_summary));
+  out_summary->group_index = (size_t)-1;
+  out_summary->group_name = table->group_name;
+  out_summary->column_count = table->column_count;
+  out_summary->row_count = table->row_count;
+  out_summary->has_source_metadata = table->has_source_metadata;
+
+  if (table->has_source_metadata) {
+    out_summary->group_index = table->source_group_index;
+    out_summary->group_line_number = table->group_line_number;
+    out_summary->heading_line_number = table->heading_line_number;
+    out_summary->unit_line_number = table->unit_line_number;
+    out_summary->type_line_number = table->type_line_number;
+  }
+
+  for (column_index = 0; column_index < table->column_count; ++column_index) {
+    if (table_column_is_numeric_compatible(table, column_index, NULL, NULL)) {
+      out_summary->numeric_column_count += 1;
+    }
+  }
+
+  if (table_geometry_candidate_indices(table, &easting_index, &northing_index)) {
+    (void)easting_index;
+    (void)northing_index;
+    out_summary->geometry_candidate_count = 2;
+  }
+
+  return AGS_STATUS_OK;
+}
+
+ags_status ags_table_collection_get_summary(
+  const ags_table_collection *collection,
+  size_t table_index,
+  ags_table_summary *out_summary
+) {
+  const ags_table *table = ags_table_collection_get(collection, table_index);
+
+  if (table == NULL || out_summary == NULL) {
+    return AGS_STATUS_INVALID_ARGUMENT;
+  }
+
+  return ags_table_get_summary(table, out_summary);
+}
+
+ags_status ags_table_get_column_summary(
+  const ags_table *table,
+  size_t column_index,
+  ags_column_summary *out_summary
+) {
+  size_t null_count = 0;
+  size_t non_null_count = 0;
+  size_t easting_index = (size_t)-1;
+  size_t northing_index = (size_t)-1;
+  int is_numeric = 0;
+  int can_derive_geometry = 0;
+
+  if (table == NULL || out_summary == NULL || column_index >= table->column_count) {
+    return AGS_STATUS_INVALID_ARGUMENT;
+  }
+
+  memset(out_summary, 0, sizeof(*out_summary));
+  out_summary->column_index = column_index;
+  out_summary->column_name = table->columns[column_index].name;
+  out_summary->unit = table->columns[column_index].unit;
+  out_summary->type = table->columns[column_index].type;
+
+  is_numeric = table_column_is_numeric_compatible(table, column_index, &null_count, &non_null_count);
+  can_derive_geometry = table_geometry_candidate_indices(table, &easting_index, &northing_index) &&
+                        (column_index == easting_index || column_index == northing_index);
+
+  out_summary->null_count = null_count;
+  out_summary->non_null_count = non_null_count;
+  out_summary->is_numeric = is_numeric;
+  out_summary->can_derive_geometry = can_derive_geometry;
+
+  if (column_index == easting_index) {
+    out_summary->column_class = AGS_COLUMN_CLASS_GEOMETRY_EASTING_CANDIDATE;
+  } else if (column_index == northing_index) {
+    out_summary->column_class = AGS_COLUMN_CLASS_GEOMETRY_NORTHING_CANDIDATE;
+  } else if (is_numeric) {
+    out_summary->column_class = AGS_COLUMN_CLASS_NUMERIC;
+  } else {
+    out_summary->column_class = AGS_COLUMN_CLASS_TEXT;
+  }
+
+  return AGS_STATUS_OK;
+}
+
+ags_status ags_table_get_column_summaries(
+  const ags_table *table,
+  ags_column_summary *out_summaries,
+  size_t summary_count
+) {
+  size_t column_index = 0;
+
+  if (table == NULL || out_summaries == NULL || summary_count != table->column_count) {
+    return AGS_STATUS_INVALID_ARGUMENT;
+  }
+
+  for (column_index = 0; column_index < summary_count; ++column_index) {
+    ags_status status = ags_table_get_column_summary(table, column_index, &out_summaries[column_index]);
+    if (status != AGS_STATUS_OK) {
+      return status;
+    }
+  }
+
+  return AGS_STATUS_OK;
+}
+
 ags_status ags_table_from_group(
   const ags_document *document,
   size_t group_index,
@@ -644,6 +883,8 @@ ags_status ags_table_from_group(
     return status;
   }
 
+  ags_table_set_source_metadata(table, group_index, group);
+
   for (row_index = 0; row_index < group->row_count; ++row_index) {
     status = ags_table_append_row(table, (const char *const *)group->rows[row_index].values, group->field_count);
     if (status != AGS_STATUS_OK) {
@@ -654,6 +895,143 @@ ags_status ags_table_from_group(
 
   *out_table = table;
   return AGS_STATUS_OK;
+}
+
+void ags_table_collection_destroy(ags_table_collection *collection) {
+  size_t table_index = 0;
+
+  if (collection == NULL) {
+    return;
+  }
+
+  if (collection->tables != NULL) {
+    for (table_index = 0; table_index < collection->table_count; ++table_index) {
+      ags_table_destroy(collection->tables[table_index]);
+    }
+  }
+
+  ags_dealloc(&collection->allocator, collection->tables);
+  ags_dealloc(&collection->allocator, collection);
+}
+
+size_t ags_table_collection_count(const ags_table_collection *collection) {
+  if (collection == NULL) {
+    return 0;
+  }
+
+  return collection->table_count;
+}
+
+const ags_table *ags_table_collection_get(
+  const ags_table_collection *collection,
+  size_t table_index
+) {
+  if (collection == NULL || table_index >= collection->table_count) {
+    return NULL;
+  }
+
+  return collection->tables[table_index];
+}
+
+ags_status ags_document_export_tables(
+  const ags_document *document,
+  const ags_table_options *options,
+  ags_table_collection **out_collection
+) {
+  ags_allocator allocator;
+  ags_table_collection *collection = NULL;
+  ags_status status = AGS_STATUS_OK;
+  size_t table_index = 0;
+
+  if (document == NULL || out_collection == NULL) {
+    return AGS_STATUS_INVALID_ARGUMENT;
+  }
+
+  *out_collection = NULL;
+
+  status = pick_allocator_from_table_options(options, &allocator);
+  if (status != AGS_STATUS_OK) {
+    return status;
+  }
+
+  collection = ags_alloc(&allocator, sizeof(*collection));
+  if (collection == NULL) {
+    return AGS_STATUS_NO_MEMORY;
+  }
+  memset(collection, 0, sizeof(*collection));
+  memcpy(&collection->allocator, &allocator, sizeof(collection->allocator));
+  collection->table_count = ags_document_group_count(document);
+
+  if (collection->table_count > 0) {
+    collection->tables = ags_alloc(&collection->allocator, collection->table_count * sizeof(*collection->tables));
+    if (collection->tables == NULL) {
+      ags_table_collection_destroy(collection);
+      return AGS_STATUS_NO_MEMORY;
+    }
+    memset(collection->tables, 0, collection->table_count * sizeof(*collection->tables));
+  }
+
+  for (table_index = 0; table_index < collection->table_count; ++table_index) {
+    status = ags_table_from_group(document, table_index, options, &collection->tables[table_index]);
+    if (status != AGS_STATUS_OK) {
+      ags_table_collection_destroy(collection);
+      return status;
+    }
+  }
+
+  *out_collection = collection;
+  return AGS_STATUS_OK;
+}
+
+ags_status ags_table_collection_from_file(
+  const char *path,
+  const ags_document_options *document_options,
+  const ags_table_options *table_options,
+  ags_table_collection **out_collection
+) {
+  ags_document *document = NULL;
+  ags_status status = AGS_STATUS_OK;
+
+  if (path == NULL || out_collection == NULL) {
+    return AGS_STATUS_INVALID_ARGUMENT;
+  }
+
+  *out_collection = NULL;
+
+  status = ags_document_parse_file(path, document_options, &document);
+  if (status != AGS_STATUS_OK) {
+    return status;
+  }
+
+  status = ags_document_export_tables(document, table_options, out_collection);
+  ags_document_destroy(document);
+  return status;
+}
+
+ags_status ags_table_collection_from_buffer(
+  const char *input,
+  size_t length,
+  const ags_document_options *document_options,
+  const ags_table_options *table_options,
+  ags_table_collection **out_collection
+) {
+  ags_document *document = NULL;
+  ags_status status = AGS_STATUS_OK;
+
+  if (input == NULL || out_collection == NULL) {
+    return AGS_STATUS_INVALID_ARGUMENT;
+  }
+
+  *out_collection = NULL;
+
+  status = ags_document_parse_buffer(input, length, document_options, &document);
+  if (status != AGS_STATUS_OK) {
+    return status;
+  }
+
+  status = ags_document_export_tables(document, table_options, out_collection);
+  ags_document_destroy(document);
+  return status;
 }
 
 static ags_status document_append_group_from_table(
@@ -683,6 +1061,12 @@ static ags_status document_append_group_from_table(
   group->name = copy_string_or_empty(&document->allocator, table->group_name);
   if (group->name == NULL) {
     return AGS_STATUS_NO_MEMORY;
+  }
+  if (table->has_source_metadata) {
+    group->group_line_number = table->group_line_number;
+    group->heading_line_number = table->heading_line_number;
+    group->unit_line_number = table->unit_line_number;
+    group->type_line_number = table->type_line_number;
   }
 
   group->field_count = table->column_count;
@@ -769,6 +1153,128 @@ ags_status ags_document_from_tables(
   }
 
   *out_document = document;
+  return AGS_STATUS_OK;
+}
+
+static ags_status append_long_table_row(
+  ags_table *table,
+  size_t group_index,
+  const char *group_name,
+  size_t row_index,
+  size_t line_number,
+  size_t column_index,
+  const char *column_name,
+  const char *unit,
+  const char *type,
+  const char *value
+) {
+  char group_index_buffer[32];
+  char row_index_buffer[32];
+  char line_number_buffer[32];
+  char column_index_buffer[32];
+  const char *row_values[9];
+
+  if (table == NULL || group_name == NULL || column_name == NULL || unit == NULL || type == NULL || value == NULL) {
+    return AGS_STATUS_INVALID_ARGUMENT;
+  }
+
+  snprintf(group_index_buffer, sizeof(group_index_buffer), "%zu", group_index);
+  snprintf(row_index_buffer, sizeof(row_index_buffer), "%zu", row_index);
+  snprintf(line_number_buffer, sizeof(line_number_buffer), "%zu", line_number);
+  snprintf(column_index_buffer, sizeof(column_index_buffer), "%zu", column_index);
+
+  row_values[0] = group_index_buffer;
+  row_values[1] = group_name;
+  row_values[2] = row_index_buffer;
+  row_values[3] = line_number_buffer;
+  row_values[4] = column_index_buffer;
+  row_values[5] = column_name;
+  row_values[6] = unit;
+  row_values[7] = type;
+  row_values[8] = value;
+
+  return ags_table_append_row(table, row_values, sizeof(row_values) / sizeof(row_values[0]));
+}
+
+ags_status ags_document_export_long_table(
+  const ags_document *document,
+  const ags_table_options *options,
+  ags_table **out_table
+) {
+  static const char *column_names[] = {
+    "AGS_GROUP_INDEX",
+    "AGS_GROUP_NAME",
+    "AGS_ROW_INDEX",
+    "AGS_LINE_NUMBER",
+    "AGS_COLUMN_INDEX",
+    "AGS_COLUMN_NAME",
+    "AGS_UNIT",
+    "AGS_TYPE",
+    "AGS_VALUE"
+  };
+  static const char *column_units[] = {"", "", "", "", "", "", "", "", ""};
+  static const char *column_types[] = {"ID", "X", "ID", "ID", "ID", "X", "X", "X", "X"};
+  ags_table *table = NULL;
+  ags_status status = AGS_STATUS_OK;
+  size_t group_index = 0;
+
+  if (document == NULL || out_table == NULL) {
+    return AGS_STATUS_INVALID_ARGUMENT;
+  }
+
+  *out_table = NULL;
+
+  status = ags_table_create(
+    "AGS_LONG",
+    sizeof(column_names) / sizeof(column_names[0]),
+    column_names,
+    column_units,
+    column_types,
+    options,
+    &table
+  );
+  if (status != AGS_STATUS_OK) {
+    return status;
+  }
+
+  for (group_index = 0; group_index < ags_document_group_count(document); ++group_index) {
+    size_t row_index = 0;
+    size_t column_index = 0;
+    const char *group_name = ags_document_group_name(document, group_index);
+
+    for (row_index = 0; row_index < ags_document_group_row_count(document, group_index); ++row_index) {
+      size_t line_number = ags_document_row_line_number(document, group_index, row_index);
+
+      for (column_index = 0; column_index < ags_document_group_field_count(document, group_index); ++column_index) {
+        status = append_long_table_row(
+          table,
+          group_index,
+          group_name == NULL ? "" : group_name,
+          row_index,
+          line_number,
+          column_index,
+          ags_document_field_name(document, group_index, column_index) == NULL
+            ? ""
+            : ags_document_field_name(document, group_index, column_index),
+          ags_document_field_unit(document, group_index, column_index) == NULL
+            ? ""
+            : ags_document_field_unit(document, group_index, column_index),
+          ags_document_field_type(document, group_index, column_index) == NULL
+            ? ""
+            : ags_document_field_type(document, group_index, column_index),
+          ags_document_cell_value(document, group_index, row_index, column_index) == NULL
+            ? ""
+            : ags_document_cell_value(document, group_index, row_index, column_index)
+        );
+        if (status != AGS_STATUS_OK) {
+          ags_table_destroy(table);
+          return status;
+        }
+      }
+    }
+  }
+
+  *out_table = table;
   return AGS_STATUS_OK;
 }
 

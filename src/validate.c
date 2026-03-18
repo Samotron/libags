@@ -88,6 +88,65 @@ static ags_status report_create(
   return AGS_STATUS_OK;
 }
 
+static ags_status load_validation_file(
+  const char *path,
+  char **out_buffer,
+  size_t *out_length
+) {
+  FILE *file = NULL;
+  long file_size = 0;
+  char *buffer = NULL;
+  size_t bytes_read = 0;
+
+  if (path == NULL || out_buffer == NULL || out_length == NULL) {
+    return AGS_STATUS_INVALID_ARGUMENT;
+  }
+
+  *out_buffer = NULL;
+  *out_length = 0;
+
+  file = fopen(path, "rb");
+  if (file == NULL) {
+    return AGS_STATUS_IO_ERROR;
+  }
+
+  if (fseek(file, 0, SEEK_END) != 0) {
+    fclose(file);
+    return AGS_STATUS_IO_ERROR;
+  }
+
+  file_size = ftell(file);
+  if (file_size < 0) {
+    fclose(file);
+    return AGS_STATUS_IO_ERROR;
+  }
+
+  if (fseek(file, 0, SEEK_SET) != 0) {
+    fclose(file);
+    return AGS_STATUS_IO_ERROR;
+  }
+
+  if (file_size > 0) {
+    buffer = (char *)malloc((size_t)file_size);
+    if (buffer == NULL) {
+      fclose(file);
+      return AGS_STATUS_NO_MEMORY;
+    }
+  }
+
+  bytes_read = fread(buffer, 1, (size_t)file_size, file);
+  fclose(file);
+
+  if (bytes_read != (size_t)file_size) {
+    free(buffer);
+    return AGS_STATUS_IO_ERROR;
+  }
+
+  *out_buffer = buffer;
+  *out_length = (size_t)file_size;
+  return AGS_STATUS_OK;
+}
+
 static void diagnostic_clear(ags_validation_report *report, ags_diagnostic_internal *diagnostic) {
   if (report == NULL || diagnostic == NULL) {
     return;
@@ -1007,6 +1066,19 @@ ags_status ags_validate_options_init(ags_validate_options *options) {
   return AGS_STATUS_OK;
 }
 
+const char *ags_diagnostic_severity_string(ags_diagnostic_severity severity) {
+  switch (severity) {
+    case AGS_DIAGNOSTIC_INFO:
+      return "info";
+    case AGS_DIAGNOSTIC_WARNING:
+      return "warning";
+    case AGS_DIAGNOSTIC_ERROR:
+      return "error";
+    default:
+      return "unknown";
+  }
+}
+
 ags_status ags_validate_text(
   const char *input,
   size_t length,
@@ -1035,6 +1107,29 @@ ags_status ags_validate_text(
   return AGS_STATUS_OK;
 }
 
+ags_status ags_validate_file(
+  const char *path,
+  const ags_validate_options *options,
+  ags_validation_report **out_report
+) {
+  char *buffer = NULL;
+  size_t length = 0;
+  ags_status status = AGS_STATUS_OK;
+
+  if (path == NULL || out_report == NULL) {
+    return AGS_STATUS_INVALID_ARGUMENT;
+  }
+
+  status = load_validation_file(path, &buffer, &length);
+  if (status != AGS_STATUS_OK) {
+    return status;
+  }
+
+  status = ags_validate_text(buffer == NULL ? "" : buffer, length, options, out_report);
+  free(buffer);
+  return status;
+}
+
 ags_status ags_validate_document(
   const ags_document *document,
   const ags_validate_options *options,
@@ -1060,6 +1155,37 @@ ags_status ags_validate_document(
 
   *out_report = report;
   return AGS_STATUS_OK;
+}
+
+ags_status ags_validate_file_with_dictionary(
+  const char *path,
+  const ags_validate_options *options,
+  ags_validation_report **out_report
+) {
+  ags_document_options document_options;
+  ags_document *document = NULL;
+  ags_status status = AGS_STATUS_OK;
+
+  if (path == NULL || out_report == NULL) {
+    return AGS_STATUS_INVALID_ARGUMENT;
+  }
+
+  status = ags_document_options_init(&document_options);
+  if (status != AGS_STATUS_OK) {
+    return status;
+  }
+  if (options != NULL) {
+    document_options.allocator = options->allocator;
+  }
+
+  status = ags_document_parse_file(path, &document_options, &document);
+  if (status != AGS_STATUS_OK) {
+    return status;
+  }
+
+  status = ags_validate_document_with_dictionary(document, options, out_report);
+  ags_document_destroy(document);
+  return status;
 }
 
 size_t ags_validation_report_diagnostic_count(const ags_validation_report *report) {

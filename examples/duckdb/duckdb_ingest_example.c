@@ -60,6 +60,11 @@ static void fake_duckdb_append_wkt_column(
 
 int main(void) {
   static const char *sample =
+    "\"GROUP\",\"PROJ\"\r\n"
+    "\"HEADING\",\"PROJ_ID\",\"PROJ_NAME\"\r\n"
+    "\"UNIT\",\"\",\"\"\r\n"
+    "\"TYPE\",\"ID\",\"X\"\r\n"
+    "\"DATA\",\"P1\",\"Site Alpha\"\r\n"
     "\"GROUP\",\"LOCA\"\r\n"
     "\"HEADING\",\"LOCA_ID\",\"LOCA_NATE\",\"LOCA_NATN\"\r\n"
     "\"UNIT\",\"\",\"m\",\"m\"\r\n"
@@ -67,55 +72,74 @@ int main(void) {
     "\"DATA\",\"L1\",\"123.45\",\"456.78\"\r\n"
     "\"DATA\",\"L2\",\"223.45\",\"556.78\"";
   ags_document *document = NULL;
-  ags_table *table = NULL;
-  ags_geometry_column *geometry = NULL;
-  ags_table_column_export easting_export;
-  ags_table_column_export northing_export;
-  ags_geometry_export geometry_export;
+  ags_table_collection *collection = NULL;
   fake_duckdb_sink sink = {0};
+  size_t table_index = 0;
 
   if (ags_document_parse_buffer(sample, strlen(sample), NULL, &document) != AGS_STATUS_OK) {
     fprintf(stderr, "failed to parse sample\n");
     return 1;
   }
 
-  if (ags_table_from_group(document, 0, NULL, &table) != AGS_STATUS_OK) {
-    fprintf(stderr, "failed to export LOCA table\n");
+  if (ags_document_export_tables(document, NULL, &collection) != AGS_STATUS_OK) {
+    fprintf(stderr, "failed to export document tables\n");
     ags_document_destroy(document);
     return 1;
   }
 
-  if (ags_table_get_column_export(table, 1, &easting_export) != AGS_STATUS_OK ||
-      ags_table_get_column_export(table, 2, &northing_export) != AGS_STATUS_OK) {
-    fprintf(stderr, "failed to export coordinate columns\n");
-    ags_table_destroy(table);
-    ags_document_destroy(document);
-    return 1;
-  }
+  for (table_index = 0; table_index < ags_table_collection_count(collection); ++table_index) {
+    const ags_table *table = ags_table_collection_get(collection, table_index);
+    ags_table_summary summary;
+    ags_geometry_column *geometry = NULL;
+    ags_geometry_export geometry_export;
+    size_t column_index = 0;
 
-  fake_duckdb_append_varchar_column(&sink, easting_export);
-  fake_duckdb_append_varchar_column(&sink, northing_export);
+    if (table == NULL || ags_table_collection_get_summary(collection, table_index, &summary) != AGS_STATUS_OK) {
+      fprintf(stderr, "failed to summarize exported table\n");
+      ags_table_collection_destroy(collection);
+      ags_document_destroy(document);
+      return 1;
+    }
 
-  if (ags_table_derive_geometry(table, NULL, &geometry) != AGS_STATUS_OK) {
-    fprintf(stderr, "failed to derive geometry\n");
-    ags_table_destroy(table);
-    ags_document_destroy(document);
-    return 1;
-  }
+    printf("table %zu: %s columns=%zu rows=%zu numeric=%zu geometry_candidates=%zu\n",
+           table_index,
+           summary.group_name,
+           summary.column_count,
+           summary.row_count,
+           summary.numeric_column_count,
+           summary.geometry_candidate_count);
 
-  if (ags_geometry_column_get_export(geometry, &geometry_export) != AGS_STATUS_OK) {
-    fprintf(stderr, "failed to export geometry\n");
+    for (column_index = 0; column_index < ags_table_column_count(table); ++column_index) {
+      ags_column_summary column_summary;
+      ags_table_column_export column_export;
+
+      if (ags_table_get_column_summary(table, column_index, &column_summary) != AGS_STATUS_OK ||
+          ags_table_get_column_export(table, column_index, &column_export) != AGS_STATUS_OK) {
+        fprintf(stderr, "failed to export table column\n");
+        ags_table_collection_destroy(collection);
+        ags_document_destroy(document);
+        return 1;
+      }
+
+      printf("  column %zu: %s class=%d non_null=%zu\n",
+             column_index,
+             column_summary.column_name,
+             (int)column_summary.column_class,
+             column_summary.non_null_count);
+      fake_duckdb_append_varchar_column(&sink, column_export);
+    }
+
+    if (ags_table_derive_geometry(table, NULL, &geometry) == AGS_STATUS_OK && geometry != NULL &&
+        ags_geometry_column_get_export(geometry, &geometry_export) == AGS_STATUS_OK) {
+      fake_duckdb_append_wkt_column(&sink, &geometry_export);
+    }
+
     ags_geometry_column_destroy(geometry);
-    ags_table_destroy(table);
-    ags_document_destroy(document);
-    return 1;
   }
 
-  fake_duckdb_append_wkt_column(&sink, &geometry_export);
   printf("rows appended: %zu\n", sink.rows_appended);
 
-  ags_geometry_column_destroy(geometry);
-  ags_table_destroy(table);
+  ags_table_collection_destroy(collection);
   ags_document_destroy(document);
   return 0;
 }

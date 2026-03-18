@@ -12,8 +12,42 @@
 LIBAGS_EXTERN_C_BEGIN
 
 typedef struct ags_table ags_table;
+typedef struct ags_table_collection ags_table_collection;
 typedef struct ags_numeric_column ags_numeric_column;
 typedef struct ags_geometry_column ags_geometry_column;
+
+typedef enum ags_column_class {
+  AGS_COLUMN_CLASS_TEXT = 0,
+  AGS_COLUMN_CLASS_NUMERIC = 1,
+  AGS_COLUMN_CLASS_GEOMETRY_EASTING_CANDIDATE = 2,
+  AGS_COLUMN_CLASS_GEOMETRY_NORTHING_CANDIDATE = 3
+} ags_column_class;
+
+typedef struct ags_table_summary {
+  size_t group_index;
+  const char *group_name;
+  size_t column_count;
+  size_t row_count;
+  size_t group_line_number;
+  size_t heading_line_number;
+  size_t unit_line_number;
+  size_t type_line_number;
+  size_t numeric_column_count;
+  size_t geometry_candidate_count;
+  int has_source_metadata;
+} ags_table_summary;
+
+typedef struct ags_column_summary {
+  size_t column_index;
+  const char *column_name;
+  const char *unit;
+  const char *type;
+  ags_column_class column_class;
+  size_t null_count;
+  size_t non_null_count;
+  int is_numeric;
+  int can_derive_geometry;
+} ags_column_summary;
 
 typedef enum ags_duplicate_heading_policy {
   AGS_DUPLICATE_HEADING_REJECT = 0,
@@ -100,11 +134,40 @@ LIBAGS_API ags_status ags_table_from_group(
   const ags_table_options *options,
   ags_table **out_table
 );
+LIBAGS_API ags_status ags_document_export_tables(
+  const ags_document *document,
+  const ags_table_options *options,
+  ags_table_collection **out_collection
+);
+LIBAGS_API ags_status ags_table_collection_from_file(
+  const char *path,
+  const ags_document_options *document_options,
+  const ags_table_options *table_options,
+  ags_table_collection **out_collection
+);
+LIBAGS_API ags_status ags_table_collection_from_buffer(
+  const char *input,
+  size_t length,
+  const ags_document_options *document_options,
+  const ags_table_options *table_options,
+  ags_table_collection **out_collection
+);
 LIBAGS_API ags_status ags_document_from_tables(
   const ags_table *const *tables,
   size_t table_count,
   const ags_document_options *options,
   ags_document **out_document
+);
+LIBAGS_API ags_status ags_document_export_long_table(
+  const ags_document *document,
+  const ags_table_options *options,
+  ags_table **out_table
+);
+LIBAGS_API void ags_table_collection_destroy(ags_table_collection *collection);
+LIBAGS_API size_t ags_table_collection_count(const ags_table_collection *collection);
+LIBAGS_API const ags_table *ags_table_collection_get(
+  const ags_table_collection *collection,
+  size_t table_index
 );
 LIBAGS_API void ags_table_destroy(ags_table *table);
 LIBAGS_API const ags_allocator *ags_table_allocator(const ags_table *table);
@@ -122,6 +185,25 @@ LIBAGS_API const char *ags_table_cell_value(
 LIBAGS_API const char *const *ags_table_column_values(
   const ags_table *table,
   size_t column_index
+);
+LIBAGS_API ags_status ags_table_get_summary(
+  const ags_table *table,
+  ags_table_summary *out_summary
+);
+LIBAGS_API ags_status ags_table_collection_get_summary(
+  const ags_table_collection *collection,
+  size_t table_index,
+  ags_table_summary *out_summary
+);
+LIBAGS_API ags_status ags_table_get_column_summary(
+  const ags_table *table,
+  size_t column_index,
+  ags_column_summary *out_summary
+);
+LIBAGS_API ags_status ags_table_get_column_summaries(
+  const ags_table *table,
+  ags_column_summary *out_summaries,
+  size_t summary_count
 );
 
 LIBAGS_API ags_status ags_table_column_to_numeric(

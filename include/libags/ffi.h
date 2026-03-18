@@ -8,6 +8,7 @@
 #include "libags/export.h"
 #include "libags/status.h"
 #include "libags/tabular.h"
+#include "libags/validate.h"
 #include "libags/version.h"
 
 LIBAGS_EXTERN_C_BEGIN
@@ -45,6 +46,32 @@ typedef struct ags_numeric_export {
   const unsigned char *is_null;
 } ags_numeric_export;
 
+typedef struct ags_table_summary_export {
+  size_t group_index;
+  ags_string_view group_name;
+  size_t column_count;
+  size_t row_count;
+  size_t group_line_number;
+  size_t heading_line_number;
+  size_t unit_line_number;
+  size_t type_line_number;
+  size_t numeric_column_count;
+  size_t geometry_candidate_count;
+  int has_source_metadata;
+} ags_table_summary_export;
+
+typedef struct ags_column_summary_export {
+  size_t column_index;
+  ags_string_view column_name;
+  ags_string_view unit;
+  ags_string_view type;
+  ags_column_class column_class;
+  size_t null_count;
+  size_t non_null_count;
+  int is_numeric;
+  int can_derive_geometry;
+} ags_column_summary_export;
+
 typedef struct ags_geometry_export {
   ags_string_view column_name;
   ags_geometry_encoding encoding;
@@ -57,6 +84,15 @@ typedef struct ags_geometry_export {
   const unsigned char *const *wkb_values;
   const size_t *wkb_lengths;
 } ags_geometry_export;
+
+typedef struct ags_validation_diagnostic_export {
+  ags_diagnostic_severity severity;
+  size_t line_number;
+  ags_string_view rule;
+  ags_string_view message;
+  ags_string_view group;
+  ags_string_view field;
+} ags_validation_diagnostic_export;
 
 LIBAGS_API int ags_ffi_supports_abi(uint32_t abi_version);
 LIBAGS_API ags_status ags_status_string_view(ags_status status, ags_string_view *out_view);
@@ -139,6 +175,20 @@ LIBAGS_API ags_status ags_table_get_column_export(
   size_t column_index,
   ags_table_column_export *out_export
 );
+LIBAGS_API ags_status ags_table_get_summary_export(
+  const ags_table *table,
+  ags_table_summary_export *out_export
+);
+LIBAGS_API ags_status ags_table_collection_get_summary_export(
+  const ags_table_collection *collection,
+  size_t table_index,
+  ags_table_summary_export *out_export
+);
+LIBAGS_API ags_status ags_table_get_column_summary_export(
+  const ags_table *table,
+  size_t column_index,
+  ags_column_summary_export *out_export
+);
 LIBAGS_API ags_status ags_numeric_column_get_export(
   const ags_numeric_column *numeric,
   ags_numeric_export *out_export
@@ -156,6 +206,11 @@ LIBAGS_API ags_status ags_geometry_column_wkb_view(
   const ags_geometry_column *geometry,
   size_t row_index,
   ags_bytes_view *out_view
+);
+LIBAGS_API ags_status ags_validation_report_get_diagnostic_export(
+  const ags_validation_report *report,
+  size_t diagnostic_index,
+  ags_validation_diagnostic_export *out_export
 );
 
 LIBAGS_EXTERN_C_END

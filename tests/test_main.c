@@ -523,6 +523,60 @@ static int test_validate_document_with_clean_sample(void) {
   return 0;
 }
 
+static int test_validate_file_helpers(void) {
+  ags_validation_report *report = NULL;
+  ags_document *dictionary_document = NULL;
+  ags_validate_options options;
+  ags_validation_diagnostic_export diagnostic_export;
+
+  EXPECT_EQ_INT(AGS_STATUS_OK, ags_validate_file("tests/fixtures/valid_basic.ags", NULL, &report));
+  EXPECT_TRUE(report != NULL);
+  EXPECT_EQ_SIZE(0u, ags_validation_report_diagnostic_count(report));
+  ags_validation_report_destroy(report);
+  report = NULL;
+
+  EXPECT_EQ_INT(
+    AGS_STATUS_OK,
+    ags_validate_file("tests/fixtures/invalid_raw.ags", NULL, &report)
+  );
+  EXPECT_TRUE(report != NULL);
+  EXPECT_TRUE(ags_validation_report_diagnostic_count(report) > 0u);
+  EXPECT_EQ_INT(
+    AGS_STATUS_OK,
+    ags_validation_report_get_diagnostic_export(report, 0u, &diagnostic_export)
+  );
+  EXPECT_TRUE(diagnostic_export.line_number > 0u);
+  EXPECT_TRUE(diagnostic_export.message.data != NULL);
+  ags_validation_report_destroy(report);
+  report = NULL;
+
+  EXPECT_EQ_INT(
+    AGS_STATUS_OK,
+    ags_validate_file_with_dictionary("tests/fixtures/dictionary_custom_valid.ags", NULL, &report)
+  );
+  EXPECT_TRUE(report != NULL);
+  EXPECT_EQ_SIZE(0u, ags_validation_report_diagnostic_count(report));
+  ags_validation_report_destroy(report);
+  report = NULL;
+
+  EXPECT_EQ_INT(AGS_STATUS_OK, ags_validate_options_init(&options));
+  EXPECT_EQ_INT(
+    AGS_STATUS_OK,
+    ags_dictionary_load_file("tests/fixtures/dictionary_custom_valid.ags", NULL, &dictionary_document)
+  );
+  options.dictionary_document = dictionary_document;
+  EXPECT_EQ_INT(
+    AGS_STATUS_OK,
+    ags_validate_file_with_dictionary("tests/fixtures/dictionary_invalid_heading_rules.ags", &options, &report)
+  );
+  EXPECT_TRUE(report != NULL);
+  EXPECT_TRUE(ags_validation_report_diagnostic_count(report) > 0u);
+  EXPECT_TRUE(report_has_rule(report, "9", AGS_DIAGNOSTIC_ERROR));
+  ags_validation_report_destroy(report);
+  ags_document_destroy(dictionary_document);
+  return 0;
+}
+
 static int test_dictionary_version_helpers(void) {
   ags_document *document = NULL;
   const char *version = NULL;
@@ -849,6 +903,96 @@ static int test_table_export_import_round_trip(void) {
   return 0;
 }
 
+static int test_table_collection_and_summaries(void) {
+  ags_table_collection *collection = NULL;
+  const ags_table *loca_table = NULL;
+  ags_table_summary summary;
+  ags_column_summary column_summary;
+  ags_table_summary_export summary_export;
+  ags_column_summary_export column_export;
+
+  EXPECT_EQ_INT(
+    AGS_STATUS_OK,
+    ags_table_collection_from_buffer(
+      sample_ags_crlf,
+      strlen(sample_ags_crlf),
+      NULL,
+      NULL,
+      &collection
+    )
+  );
+  EXPECT_TRUE(collection != NULL);
+  EXPECT_EQ_SIZE(2u, ags_table_collection_count(collection));
+
+  EXPECT_EQ_INT(AGS_STATUS_OK, ags_table_collection_get_summary(collection, 0u, &summary));
+  EXPECT_EQ_SIZE(0u, summary.group_index);
+  EXPECT_STREQ("PROJ", summary.group_name);
+  EXPECT_EQ_SIZE(2u, summary.column_count);
+  EXPECT_EQ_SIZE(1u, summary.row_count);
+  EXPECT_EQ_SIZE(1u, summary.group_line_number);
+  EXPECT_TRUE(summary.has_source_metadata != 0);
+
+  EXPECT_EQ_INT(AGS_STATUS_OK, ags_table_collection_get_summary(collection, 1u, &summary));
+  EXPECT_EQ_SIZE(1u, summary.group_index);
+  EXPECT_STREQ("LOCA", summary.group_name);
+  EXPECT_EQ_SIZE(3u, summary.column_count);
+  EXPECT_EQ_SIZE(2u, summary.row_count);
+  EXPECT_EQ_SIZE(2u, summary.numeric_column_count);
+  EXPECT_EQ_SIZE(2u, summary.geometry_candidate_count);
+
+  loca_table = ags_table_collection_get(collection, 1u);
+  EXPECT_TRUE(loca_table != NULL);
+
+  EXPECT_EQ_INT(AGS_STATUS_OK, ags_table_get_column_summary(loca_table, 1u, &column_summary));
+  EXPECT_STREQ("LOCA_NATE", column_summary.column_name);
+  EXPECT_EQ_INT(AGS_COLUMN_CLASS_GEOMETRY_EASTING_CANDIDATE, column_summary.column_class);
+  EXPECT_EQ_SIZE(0u, column_summary.null_count);
+  EXPECT_EQ_SIZE(2u, column_summary.non_null_count);
+  EXPECT_TRUE(column_summary.is_numeric != 0);
+  EXPECT_TRUE(column_summary.can_derive_geometry != 0);
+
+  EXPECT_EQ_INT(AGS_STATUS_OK, ags_table_collection_get_summary_export(collection, 1u, &summary_export));
+  EXPECT_TRUE(string_view_matches(summary_export.group_name, "LOCA"));
+  EXPECT_EQ_SIZE(2u, summary_export.numeric_column_count);
+
+  EXPECT_EQ_INT(AGS_STATUS_OK, ags_table_get_column_summary_export(loca_table, 2u, &column_export));
+  EXPECT_TRUE(string_view_matches(column_export.column_name, "LOCA_NATN"));
+  EXPECT_EQ_INT(AGS_COLUMN_CLASS_GEOMETRY_NORTHING_CANDIDATE, column_export.column_class);
+  EXPECT_TRUE(column_export.is_numeric != 0);
+  EXPECT_TRUE(column_export.can_derive_geometry != 0);
+
+  ags_table_collection_destroy(collection);
+  return 0;
+}
+
+static int test_table_collection_duplicate_heading_rename(void) {
+  ags_table_collection *collection = NULL;
+  ags_table_options options;
+  const ags_table *table = NULL;
+
+  EXPECT_EQ_INT(AGS_STATUS_OK, ags_table_options_init(&options));
+  options.duplicate_heading_policy = AGS_DUPLICATE_HEADING_RENAME;
+  EXPECT_EQ_INT(
+    AGS_STATUS_OK,
+    ags_table_collection_from_file(
+      "tests/fixtures/invalid_parsed_duplicate_heading.ags",
+      NULL,
+      &options,
+      &collection
+    )
+  );
+  EXPECT_TRUE(collection != NULL);
+  EXPECT_EQ_SIZE(1u, ags_table_collection_count(collection));
+
+  table = ags_table_collection_get(collection, 0u);
+  EXPECT_TRUE(table != NULL);
+  EXPECT_STREQ("AB12_VAL", ags_table_column_name(table, 1u));
+  EXPECT_STREQ("AB12_VAL_2", ags_table_column_name(table, 2u));
+
+  ags_table_collection_destroy(collection);
+  return 0;
+}
+
 static int test_duplicate_heading_policies(void) {
   const char *column_names[3] = {"COL", "COL", "COL"};
   const char *units[3] = {"", "", ""};
@@ -1061,6 +1205,32 @@ static int test_geometry_derivation_helpers(void) {
   ags_table_destroy(bad_table);
   ags_geometry_column_destroy(wkb_geometry);
   ags_geometry_column_destroy(geometry);
+  ags_table_destroy(table);
+  ags_document_destroy(document);
+  return 0;
+}
+
+static int test_document_export_long_table(void) {
+  ags_document *document = NULL;
+  ags_table *table = NULL;
+
+  EXPECT_EQ_INT(
+    AGS_STATUS_OK,
+    ags_document_parse_buffer(sample_ags_crlf, strlen(sample_ags_crlf), NULL, &document)
+  );
+  EXPECT_EQ_INT(AGS_STATUS_OK, ags_document_export_long_table(document, NULL, &table));
+  EXPECT_TRUE(table != NULL);
+  EXPECT_STREQ("AGS_LONG", ags_table_group_name(table));
+  EXPECT_EQ_SIZE(9u, ags_table_column_count(table));
+  EXPECT_EQ_SIZE(8u, ags_table_row_count(table));
+  EXPECT_STREQ("0", ags_table_cell_value(table, 0u, 0u));
+  EXPECT_STREQ("PROJ", ags_table_cell_value(table, 0u, 1u));
+  EXPECT_STREQ("0", ags_table_cell_value(table, 0u, 2u));
+  EXPECT_STREQ("PROJ_ID", ags_table_cell_value(table, 0u, 5u));
+  EXPECT_STREQ("P1", ags_table_cell_value(table, 0u, 8u));
+  EXPECT_STREQ("LOCA_NATN", ags_table_cell_value(table, 7u, 5u));
+  EXPECT_STREQ("556.78", ags_table_cell_value(table, 7u, 8u));
+
   ags_table_destroy(table);
   ags_document_destroy(document);
   return 0;
@@ -1437,6 +1607,7 @@ int main(void) {
   RUN_TEST(test_validate_text_with_invalid_fixture);
   RUN_TEST(test_validate_document_with_invalid_fixture);
   RUN_TEST(test_validate_document_with_clean_sample);
+  RUN_TEST(test_validate_file_helpers);
   RUN_TEST(test_dictionary_version_helpers);
   RUN_TEST(test_dictionary_loaders);
   RUN_TEST(test_validate_document_with_custom_dictionary_fixture);
@@ -1448,11 +1619,14 @@ int main(void) {
   RUN_TEST(test_validate_document_with_dictionary_refs);
   RUN_TEST(test_validate_document_with_dictionary_required_groups);
   RUN_TEST(test_table_export_import_round_trip);
+  RUN_TEST(test_table_collection_and_summaries);
+  RUN_TEST(test_table_collection_duplicate_heading_rename);
   RUN_TEST(test_duplicate_heading_policies);
   RUN_TEST(test_numeric_column_helpers);
   RUN_TEST(test_document_sorting_helpers);
   RUN_TEST(test_document_hierarchical_sort);
   RUN_TEST(test_geometry_derivation_helpers);
+  RUN_TEST(test_document_export_long_table);
   RUN_TEST(test_ffi_borrowed_views_and_abi);
   RUN_TEST(test_ffi_row_cursor);
   RUN_TEST(test_ffi_table_numeric_and_geometry_exports);

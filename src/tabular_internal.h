@@ -13,6 +13,12 @@ typedef struct ags_table_column_internal {
 struct ags_table {
   ags_allocator allocator;
   char *group_name;
+  size_t source_group_index;
+  size_t group_line_number;
+  size_t heading_line_number;
+  size_t unit_line_number;
+  size_t type_line_number;
+  int has_source_metadata;
   size_t column_count;
   size_t row_count;
   size_t row_capacity;

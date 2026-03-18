@@ -26,9 +26,15 @@ typedef struct ags_validate_options {
 } ags_validate_options;
 
 LIBAGS_API ags_status ags_validate_options_init(ags_validate_options *options);
+LIBAGS_API const char *ags_diagnostic_severity_string(ags_diagnostic_severity severity);
 LIBAGS_API ags_status ags_validate_text(
   const char *input,
   size_t length,
+  const ags_validate_options *options,
+  ags_validation_report **out_report
+);
+LIBAGS_API ags_status ags_validate_file(
+  const char *path,
   const ags_validate_options *options,
   ags_validation_report **out_report
 );
@@ -39,6 +45,11 @@ LIBAGS_API ags_status ags_validate_document(
 );
 LIBAGS_API ags_status ags_validate_document_with_dictionary(
   const ags_document *document,
+  const ags_validate_options *options,
+  ags_validation_report **out_report
+);
+LIBAGS_API ags_status ags_validate_file_with_dictionary(
+  const char *path,
   const ags_validate_options *options,
   ags_validation_report **out_report
 );
