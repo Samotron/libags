@@ -1,0 +1,24 @@
+/build/
+/install/
+/out/
+/dist/
+/.cache/
+
+# CMake and build tooling
+/CMakeUserPresets.json
+/compile_commands.json
+/cmake-build-*/
+
+# Test and local runtime artifacts
+/*.core
+/core.*
+/vgcore.*
+/Testing/
+
+# Editor and OS noise
+/.idea/
+/.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

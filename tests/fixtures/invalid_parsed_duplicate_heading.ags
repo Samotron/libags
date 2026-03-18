@@ -1,0 +1,5 @@
+"GROUP","AB12"
+"HEADING","BADFIELDNAME","AB12_VAL","AB12_VAL","OTHR_REF","AB12_FLAG","AB12_DATE","AB12_TIME","AB12_SCI","AB12_SF"
+"UNIT","","","","","","yyyy-mm-dd","hh:mm:ss","",""
+"TYPE","ID","2DP","2DP","XN","YN","DT","T","2SCI","3SF"
+"DATA","R1","12.30","12.30","ZZ","maybe","2025/01/01","14-20-59","1.2e+02","0.0120"
